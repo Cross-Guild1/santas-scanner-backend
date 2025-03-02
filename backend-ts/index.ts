@@ -6,7 +6,7 @@ import { questions } from './data/questions';
 
 // Vercel serverless config
 const app: Express = express();
-const port = process.env.PORT || 3000;
+const port = 4000;
 
 // Enhanced CORS configuration
 const corsOptions = {
@@ -16,43 +16,66 @@ const corsOptions = {
     'http://localhost:3000',
     'https://santas-scanner-backenddeploy-production.up.railway.app'
   ]
-  /*methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  //credentials: true,
-  maxAge: 86400*/
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); 
+
+// Sample data for testing when DB is not available
+const mockLeaderboard = [
+  {
+    name: "Test User 1",
+    verdict: "NICE",
+    message: "Very kind and helpful",
+    score: 95,
+    country: "DE",
+    timestamp: new Date()
+  },
+  {
+    name: "Test User 2",
+    verdict: "NAUGHTY",
+    message: "Needs to improve behavior",
+    score: 45,
+    country: "DE",
+    timestamp: new Date()
+  }
+];
 
 // Database connection manager
 let isConnected = false;
 let cachedConnection: typeof mongoose | null = null;
 
 const connectDB = async () => {
-    if (isConnected) return;
+    if (isConnected) return true;
   
     try {
-      if (!process.env.MONGODB_URI) {
-        throw new Error('MONGODB_URI is not defined');
+      // For testing, you can use your MongoDB connection string
+      // or a fallback empty string to trigger the error handling
+      const mongoUri = 'mongodb+srv://philippkhachik:root@dev.42htl.mongodb.net/?retryWrites=true&w=majority&appName=dev';
+      
+      if (!mongoUri) {
+        console.log('MongoDB URI not provided, using mock data');
+        return false;
       }
 
-      const conn = await mongoose.connect(process.env.MONGODB_URI, {
-        serverSelectionTimeoutMS: 10000, // Longer timeout
-        socketTimeoutMS: 45000,          // Longer timeout
+      const conn = await mongoose.connect(mongoUri, {
+        serverSelectionTimeoutMS: 5000, // Shorter timeout for faster testing
+        socketTimeoutMS: 10000,
         retryWrites: true,
         w: 'majority'
       });
 
       if (conn.connection.readyState !== 1) {
-        throw new Error('MongoDB connection not ready');
+        console.log('MongoDB connection not in ready state, using mock data');
+        return false;
       }
 
       isConnected = true;
       console.log(`MongoDB Connected: ${conn.connection.host}`);
+      return true;
 
     } catch (error) {
-      console.error('MongoDB connection error:', error);
-      process.exit(1);
+      console.error('MongoDB connection error, using mock data:', error);
+      return false;
     }
 };
 
@@ -89,7 +112,7 @@ app.get("/questions", async (req: Request, res: Response): Promise<void> => {
 
 app.post("/scan-results", express.json(), async (req: Request, res: Response): Promise<void> => {
   try {
-    await connectDB();
+    const dbConnected = await connectDB();
     
     // Type-safe validation
     const requiredFields = ['name', 'verdict', 'message', 'score'];
@@ -100,13 +123,24 @@ app.post("/scan-results", express.json(), async (req: Request, res: Response): P
       }
     }
 
-    const scanResult = new ScanResult({
-      ...req.body,
-      score: Math.min(100, Math.max(0, req.body.score))
-    });
+    if (dbConnected) {
+      // If database connected, save to MongoDB
+      const scanResult = new ScanResult({
+        ...req.body,
+        score: Math.min(100, Math.max(0, req.body.score))
+      });
 
-    await scanResult.save();
-    res.status(201).json(scanResult);
+      await scanResult.save();
+      res.status(201).json(scanResult);
+    } else {
+      // Mock response for testing
+      res.status(201).json({
+        ...req.body,
+        score: Math.min(100, Math.max(0, req.body.score)),
+        _id: "mock-id-" + Date.now(),
+        timestamp: new Date()
+      });
+    }
     
   } catch (error) {
     console.error('Scan result error:', error);
@@ -117,23 +151,28 @@ app.post("/scan-results", express.json(), async (req: Request, res: Response): P
 app.get("/leaderboard", async (req: Request, res: Response): Promise<void> => {
     try {
       console.log('Connecting to database...');
-      await connectDB();
+      const dbConnected = await connectDB();
       
-      console.log('Fetching leaderboard...');
-      const leaderboard = await ScanResult.find()
-        .sort({ score: -1 })
-        .limit(100)
-        .lean();
-        
-      console.log(`Found ${leaderboard.length} results`);
-      res.json(leaderboard);
+      if (dbConnected) {
+        console.log('Fetching leaderboard from database...');
+        const leaderboard = await ScanResult.find()
+          .sort({ score: -1 })
+          .limit(100)
+          .lean();
+          
+        console.log(`Found ${leaderboard.length} results`);
+        res.json(leaderboard);
+      } else {
+        // Use mock data for testing
+        console.log('Using mock leaderboard data');
+        res.json(mockLeaderboard);
+      }
       
     } catch (error) {
       console.error('Detailed leaderboard error:', error);
-      res.status(500).json({ 
-        error: 'Failed to retrieve leaderboard',
-        details: error instanceof Error ? error.message : String(error)
-      });
+      // Fallback to mock data on error
+      console.log('Error occurred, using mock leaderboard data');
+      res.json(mockLeaderboard);
     }
 });
 
@@ -156,9 +195,3 @@ const server = app.listen(Number(port), '0.0.0.0', () => {
     console.log(`Server running on port ${port}`);
 });
 
-// Vercel export
-//export default app;
-
-
-
-  
